@@ -380,6 +380,7 @@ import {
   CreateInvoiceDto,
   CreateInvoiceResponseDto,
   ListInvoicesResponseDto,
+  ContactDetailsDto,
   AltDto
 } from '../types/ghl-types.js';
 
@@ -3048,10 +3049,12 @@ export class GHLApiClient {
   async getSocialAccounts(): Promise<GHLApiResponse<GHLGetAccountsResponse>> {
     try {
       const locationId = this.config.locationId;
-      const response: AxiosResponse<GHLGetAccountsResponse> = await this.axiosInstance.get(
+      const response: AxiosResponse<any> = await this.axiosInstance.get(
         `/social-media-posting/${locationId}/accounts`
       );
-      return this.wrapResponse(response.data);
+      // GHL nests the payload under `results`; fall back to the body for resilience.
+      const payload = (response.data?.results ?? response.data) as GHLGetAccountsResponse;
+      return this.wrapResponse(payload);
     } catch (error) {
       throw error;
     }
@@ -6762,13 +6765,97 @@ export class GHLApiClient {
    * Create invoice
    * POST /invoices/
    */
-  async createInvoice(invoiceData: CreateInvoiceDto): Promise<GHLApiResponse<CreateInvoiceResponseDto>> {
+  async createInvoice(invoiceData: CreateInvoiceDto & { contactId?: string }): Promise<GHLApiResponse<CreateInvoiceResponseDto>> {
     try {
-      const payload = {
-        ...invoiceData,
-        altId: invoiceData.altId || this.config.locationId,
-        altType: 'location' as const
+      const altId = invoiceData.altId || this.config.locationId;
+
+      // GHL's POST /invoices/ requires businessDetails, contactDetails, name,
+      // sentTo and liveMode. The MCP tool only exposes a handful of fields, so
+      // auto-assemble the rest from the location and contact when not supplied.
+
+      // Business details from the location
+      let businessDetails = invoiceData.businessDetails;
+      if (!businessDetails) {
+        const locationResp = await this.getLocationById(altId);
+        const loc = locationResp.data?.location;
+        const biz = loc?.business;
+        businessDetails = {
+          name: biz?.name || loc?.name,
+          phoneNo: loc?.phone,
+          website: biz?.website || loc?.website,
+          logoUrl: biz?.logoUrl || loc?.logoUrl,
+          address: {
+            addressLine1: biz?.address || loc?.address,
+            city: biz?.city || loc?.city,
+            state: biz?.state || loc?.state,
+            countryCode: biz?.country || loc?.country,
+            postalCode: biz?.postalCode || loc?.postalCode
+          }
+        };
+      }
+
+      // Contact details from the contact
+      let contactDetails = invoiceData.contactDetails;
+      let contactEmail = contactDetails?.email;
+      let contactPhone = contactDetails?.phoneNo;
+      if (!contactDetails && invoiceData.contactId) {
+        const contactResp = await this.getContact(invoiceData.contactId);
+        const c = contactResp.data;
+        const fullName = c?.name
+          || [c?.firstName, c?.lastName].filter(Boolean).join(' ').trim()
+          || 'Customer';
+        contactEmail = c?.email;
+        contactPhone = c?.phone;
+        contactDetails = {
+          id: invoiceData.contactId,
+          name: fullName,
+          email: c?.email,
+          phoneNo: c?.phone,
+          companyName: c?.companyName,
+          address: {
+            addressLine1: c?.address1,
+            city: c?.city,
+            state: c?.state,
+            countryCode: c?.country,
+            postalCode: c?.postalCode
+          }
+        };
+      }
+
+      const currency = invoiceData.currency || 'USD';
+
+      // Normalize line items — GHL expects currency, qty and a taxes array on each
+      const items = (invoiceData.items || []).map(item => ({
+        ...item,
+        currency: item.currency || currency,
+        qty: item.qty ?? 1,
+        taxes: item.taxes || []
+      }));
+
+      // Deliver-to from the contact if not explicitly provided
+      const sentTo = invoiceData.sentTo || {
+        email: contactEmail ? [contactEmail] : [],
+        phoneNo: contactPhone ? [contactPhone] : []
       };
+
+      const today = new Date().toISOString().split('T')[0];
+
+      const payload: CreateInvoiceDto = {
+        ...invoiceData,
+        altId,
+        altType: 'location' as const,
+        name: invoiceData.name || invoiceData.title || 'Invoice',
+        businessDetails,
+        currency,
+        items,
+        discount: invoiceData.discount || { type: 'fixed', value: 0 },
+        contactDetails: contactDetails as ContactDetailsDto,
+        issueDate: invoiceData.issueDate || today,
+        sentTo,
+        liveMode: invoiceData.liveMode ?? true
+      };
+      // contactId is a tool-only convenience field, not part of the GHL payload
+      delete (payload as CreateInvoiceDto & { contactId?: string }).contactId;
 
       const response: AxiosResponse<CreateInvoiceResponseDto> = await this.axiosInstance.post(
         '/invoices/',

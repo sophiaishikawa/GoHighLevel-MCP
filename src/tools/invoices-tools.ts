@@ -193,7 +193,7 @@ export class InvoicesTools {
       // Invoice Management Tools
       {
         name: 'create_invoice',
-        description: 'Create a new invoice',
+        description: 'Create a new invoice. Business details (from the location) and contact details (from the contact) are filled in automatically; only contactId, title and items are needed.',
         inputSchema: {
           type: 'object',
           properties: {
