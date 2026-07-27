@@ -567,7 +567,6 @@ ghl-mcp-server/
 │   ├── DEPLOYMENT.md          # Deployment guides
 │   ├── CLAUDE-DESKTOP-DEPLOYMENT-PLAN.md
 │   ├── VERCEL-DEPLOYMENT.md
-│   ├── CLOUD-DEPLOYMENT.md
 │   └── PROJECT-COMPLETION.md
 ├── 📄 Configuration files
 │   ├── package.json           # Dependencies and scripts
